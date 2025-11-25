@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<routes>
+    <!-- Vehicle Type Distribution: 63% motorbike, 31% car, 3% bus, 3% truck -->
+    <vTypeDistribution id="mixedTraffic">
+        <vType id="motorbike" vClass="motorcycle" accel="2.6" decel="4.5" length="1.9" minGap="1.0" maxSpeed="16.0" sigma="0.5" speedFactor="normc(1.0,0.12,0.7,1.3)" color="0,255,0" probability="0.63"/>
+        <vType id="car" vClass="passenger" accel="2.6" decel="4.5" length="4.5" minGap="2.5" maxSpeed="20.0" sigma="0.5" speedFactor="normc(1.0,0.10,0.7,1.3)" color="255,0,0" probability="0.31"/>
+        <vType id="bus" vClass="bus" accel="1.2" decel="3.0" length="12.0" minGap="3.0" maxSpeed="16.0" sigma="0.6" speedFactor="normc(0.95,0.08,0.7,1.2)" color="0,128,255" probability="0.03"/>
+        <vType id="truck" vClass="truck" accel="1.3" decel="3.0" length="7.5" minGap="3.0" maxSpeed="16.0" sigma="0.6" speedFactor="normc(0.95,0.08,0.7,1.2)" color="255,165,0" probability="0.03"/>
+    </vTypeDistribution>
+
+    <!-- Routes from North -->
+    <route id="N_to_S" edges="N_in S_out"/>
+    <route id="N_to_E" edges="N_in E_out"/>
+
+    <!-- Routes from South -->
+    <route id="S_to_N" edges="S_in N_out"/>
+    <route id="S_to_E" edges="S_in E_out"/>
+
+    <!-- Routes from East -->
+    <route id="E_to_N" edges="E_in N_out"/>
+    <route id="E_to_S" edges="E_in S_out"/>
+
+    <!-- Traffic Flows: Total ~1900 veh/hr = 0.528 veh/s
+         Distribution: ~633 veh/hr per direction (3 directions)
+         Per direction: 50% straight, 50% turn -->
+    
+    <!-- North flows: 633 veh/hr -->
+    <flow id="N_to_S_flow" type="mixedTraffic" route="N_to_S" begin="0" end="3600" vehsPerHour="317" departLane="best" departSpeed="max"/>
+    <flow id="N_to_E_flow" type="mixedTraffic" route="N_to_E" begin="0" end="3600" vehsPerHour="316" departLane="best" departSpeed="max"/>
+
+    <!-- South flows: 633 veh/hr -->
+    <flow id="S_to_N_flow" type="mixedTraffic" route="S_to_N" begin="0" end="3600" vehsPerHour="317" departLane="best" departSpeed="max"/>
+    <flow id="S_to_E_flow" type="mixedTraffic" route="S_to_E" begin="0" end="3600" vehsPerHour="316" departLane="best" departSpeed="max"/>
+
+    <!-- East flows: 634 veh/hr -->
+    <flow id="E_to_N_flow" type="mixedTraffic" route="E_to_N" begin="0" end="3600" vehsPerHour="317" departLane="best" departSpeed="max"/>
+    <flow id="E_to_S_flow" type="mixedTraffic" route="E_to_S" begin="0" end="3600" vehsPerHour="317" departLane="best" departSpeed="max"/>
+
+</routes>

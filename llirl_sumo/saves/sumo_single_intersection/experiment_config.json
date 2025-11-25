@@ -1,0 +1,16 @@
+{
+  "algorithm": "reinforce",
+  "optimizer": "sgd",
+  "learning_rate": 0.01,
+  "batch_size": 4,
+  "num_iterations": 10,
+  "num_periods": 5,
+  "hidden_size": 200,
+  "num_layers": 2,
+  "baseline": null,
+  "device": "cuda",
+  "seed": 1009,
+  "sumo_config": "../nets/single-intersection/run_morning_6to10.sumocfg",
+  "model_path": "saves/sumo_single_intersection",
+  "output_path": "output/sumo_single_intersection"
+}
