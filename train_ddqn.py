@@ -12,12 +12,12 @@ if __name__ == "__main__":
     
     cmd = [
         sys.executable, "ddqn_training.py",
-        "--sumo_config", "../nets/single-intersection/run_morning_6to10.sumocfg",
+        "--sumo_config", "../nets/single-intersection/run_morning_6to10_10k.sumocfg",
         "--output", "output/sumo_single_intersection",
         "--model_path", "saves/sumo_single_intersection",
         "--num_periods", "30",
         "--num_episodes", "100",
-        "--max_steps", "3600",
+        "--max_steps", "14400",
         "--lr", "0.001",
         "--gamma", "0.95",
         "--batch_size", "32",

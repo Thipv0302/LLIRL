@@ -13,7 +13,7 @@ if __name__ == "__main__":
     # Step 1: Environment clustering
     clustering_cmd = [
         sys.executable, "env_clustering.py",
-        "--sumo_config", "../nets/single-intersection/run_morning_6to10.sumocfg",
+        "--sumo_config", "../nets/single-intersection/run_morning_6to10_10k.sumocfg",
         "--model_path", "saves/sumo_single_intersection",
         "--et_length", "1",
         "--num_periods", "30",
@@ -31,7 +31,7 @@ if __name__ == "__main__":
     # Step 2: Policy training
     policy_cmd = [
         sys.executable, "policy_training.py",
-        "--sumo_config", "../nets/single-intersection/run_morning_6to10.sumocfg",
+        "--sumo_config", "../nets/single-intersection/run_morning_6to10_10k.sumocfg",
         "--model_path", "saves/sumo_single_intersection",
         "--output", "output/sumo_single_intersection",
         "--algorithm", "reinforce",

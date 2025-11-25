@@ -12,7 +12,7 @@ if __name__ == "__main__":
     
     cmd = [
         sys.executable, "ppo_training.py",
-        "--sumo_config", "../nets/single-intersection/run_morning_6to10.sumocfg",
+        "--sumo_config", "../nets/single-intersection/run_morning_6to10_10k.sumocfg",
         "--output", "output/sumo_single_intersection",
         "--model_path", "saves/sumo_single_intersection",
         "--batch_size", "8",

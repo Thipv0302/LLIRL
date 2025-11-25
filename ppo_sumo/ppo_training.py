@@ -22,7 +22,7 @@ import gym
 gym.register(
     'SUMO-SingleIntersection-v1',
     entry_point='myrllib.envs.sumo_env:SUMOEnv',
-    max_episode_steps=3600
+    max_episode_steps=14400  # 4 giờ = 14400 giây
 )
 
 from myrllib.policies import NormalMLPPolicy

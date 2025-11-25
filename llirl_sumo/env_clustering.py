@@ -35,7 +35,7 @@ import gym
 gym.register(
     'SUMO-SingleIntersection-v1',
     entry_point='myrllib.envs.sumo_env:SUMOEnv',
-    max_episode_steps=3600
+    max_episode_steps=14400  # 4 giờ = 14400 giây
 )
 
 ### personal lib
@@ -76,6 +76,21 @@ args = parser.parse_args()
 print(args)
 
 device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
+
+# Print device information
+print(f"\n{'='*60}")
+print(f"Device Configuration:")
+print(f"  Requested device: {args.device}")
+print(f"  CUDA available: {torch.cuda.is_available()}")
+print(f"  Actual device: {device}")
+if torch.cuda.is_available():
+    print(f"  GPU Name: {torch.cuda.get_device_name(0)}")
+    print(f"  GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+    print(f"  [OK] Training will use GPU")
+else:
+    print(f"  [WARNING] CUDA not available - Training will use CPU")
+print(f"{'='*60}\n")
+
 np.set_printoptions(precision=3)
 np.random.seed(args.seed); torch.manual_seed(args.seed); random.seed(args.seed)
 
