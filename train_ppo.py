@@ -19,7 +19,7 @@ if __name__ == "__main__":
         "--hidden_size", "200",
         "--num_layers", "2",
         "--num_iter", "50",
-        "--num_periods", "30",
+        "--num_periods", "5",
         "--lr", "3e-4",
         "--algorithm", "ppo",
         "--opt", "adam",

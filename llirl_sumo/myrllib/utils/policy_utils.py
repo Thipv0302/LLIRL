@@ -27,6 +27,10 @@ def create_general_policy(policies, priors, state_dim, action_dim, hidden_sizes,
     if len(policies) == 0:
         return None
     
+    # Validate priors length matches policies length
+    if len(priors) != len(policies):
+        raise ValueError(f'Priors length ({len(priors)}) must match policies length ({len(policies)})')
+    
     # Normalize priors
     priors_array = np.array(priors)
     if priors_array.sum() > 0:
@@ -84,6 +88,10 @@ def create_general_env_model(env_models, priors, input_size, output_size, hidden
     """
     if len(env_models) == 0:
         return None
+    
+    # Validate priors length matches env_models length
+    if len(priors) != len(env_models):
+        raise ValueError(f'Priors length ({len(priors)}) must match env_models length ({len(env_models)})')
     
     # Normalize priors
     priors_array = np.array(priors)

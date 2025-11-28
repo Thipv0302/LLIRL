@@ -30,6 +30,56 @@ def load_env_models(model_path, device='cpu'):
     print(f"Loaded {len(env_models)} environment models")
     return env_models
 
+def load_mixture_library(model_path, device='cpu'):
+    """Load mixture library (both env_models and policies)"""
+    env_models_path = os.path.join(model_path, 'env_models.pth')
+    if not os.path.exists(env_models_path):
+        raise FileNotFoundError(f"Mixture library not found at {env_models_path}")
+    
+    checkpoint = torch.load(env_models_path, map_location=device)
+    
+    # Load environment models
+    env_models = []
+    for state_dict in checkpoint['env_models']:
+        env_model = EnvModel(
+            checkpoint['input_size'],
+            checkpoint['output_size'],
+            hidden_sizes=checkpoint['hidden_sizes']
+        ).to(device)
+        env_model.load_state_dict(state_dict)
+        env_models.append(env_model)
+    
+    # Load policies if available
+    policies = []
+    if 'policies' in checkpoint and checkpoint['policies'] is not None:
+        # Get policy architecture info
+        state_dim = checkpoint.get('state_dim')
+        action_dim = checkpoint.get('action_dim')
+        hidden_size = checkpoint.get('hidden_size')
+        num_layers = checkpoint.get('num_layers')
+        
+        if state_dim is not None and action_dim is not None:
+            for policy_state_dict in checkpoint['policies']:
+                if policy_state_dict is not None:
+                    policy = NormalMLPPolicy(
+                        state_dim,
+                        action_dim,
+                        hidden_sizes=(hidden_size,) * num_layers if hidden_size and num_layers else (200,) * 2
+                    ).to(device)
+                    policy.load_state_dict(policy_state_dict)
+                    policies.append(policy)
+                else:
+                    policies.append(None)
+        else:
+            print("[WARNING] Policy architecture info not found in mixture library. Cannot load policies.")
+    else:
+        print("[INFO] No policies found in mixture library.")
+    
+    num_policies_loaded = sum(1 for p in policies if p is not None)
+    print(f"Loaded mixture library: {len(env_models)} env_models, {num_policies_loaded} policies")
+    
+    return env_models, policies, checkpoint
+
 def load_env_model_init(model_path, device='cpu'):
     """Load universal initialization model"""
     env_model_init_path = os.path.join(model_path, 'env_model_init.pth')
@@ -67,8 +117,50 @@ def load_crp_state(model_path):
     print(f"Loaded CRP state: L={crp._L}, t={crp._t}")
     return crp
 
-def load_policies(model_path, device='cpu'):
-    """Load policy library"""
+def load_policies(model_path, device='cpu', from_mixture_library=True):
+    """Load policy library
+    
+    Args:
+        model_path: Path to model directory
+        device: Device to load on
+        from_mixture_library: If True, try to load from mixture library first, 
+                              otherwise load from policies_final.pth
+    """
+    # Try to load from mixture library first if requested
+    if from_mixture_library:
+        env_models_path = os.path.join(model_path, 'env_models.pth')
+        if os.path.exists(env_models_path):
+            try:
+                checkpoint = torch.load(env_models_path, map_location=device)
+                if 'policies' in checkpoint and checkpoint['policies'] is not None:
+                    policies = []
+                    state_dim = checkpoint.get('state_dim')
+                    action_dim = checkpoint.get('action_dim')
+                    hidden_size = checkpoint.get('hidden_size')
+                    num_layers = checkpoint.get('num_layers')
+                    
+                    if state_dim is not None and action_dim is not None:
+                        for policy_state_dict in checkpoint['policies']:
+                            if policy_state_dict is not None:
+                                policy = NormalMLPPolicy(
+                                    state_dim,
+                                    action_dim,
+                                    hidden_sizes=(hidden_size,) * num_layers if hidden_size and num_layers else (200,) * 2
+                                ).to(device)
+                                policy.load_state_dict(policy_state_dict)
+                                policies.append(policy)
+                            else:
+                                policies.append(None)
+                        
+                        # Filter out None policies for backward compatibility
+                        policies_filtered = [p for p in policies if p is not None]
+                        print(f"Loaded {len(policies_filtered)} policies from mixture library")
+                        return policies_filtered, checkpoint
+            except Exception as e:
+                print(f"[WARNING] Could not load policies from mixture library: {e}")
+                print("Falling back to policies_final.pth")
+    
+    # Fallback to policies_final.pth
     policies_path = os.path.join(model_path, 'policies_final.pth')
     if not os.path.exists(policies_path):
         raise FileNotFoundError(f"Policies not found at {policies_path}")
@@ -84,7 +176,7 @@ def load_policies(model_path, device='cpu'):
         policy.load_state_dict(state_dict)
         policies.append(policy)
     
-    print(f"Loaded {len(policies)} policies")
+    print(f"Loaded {len(policies)} policies from policies_final.pth")
     return policies, checkpoint
 
 def load_task_info(model_path):

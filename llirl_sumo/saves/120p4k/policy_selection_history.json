@@ -1,0 +1,50 @@
+{
+  "periods": [
+    2,
+    3,
+    4,
+    5
+  ],
+  "cluster_based_policy": [
+    1,
+    1,
+    1,
+    1
+  ],
+  "performance_based_policy": [
+    1,
+    1,
+    1,
+    1
+  ],
+  "selected_policy": [
+    1,
+    1,
+    1,
+    1
+  ],
+  "selection_method": [
+    "cluster",
+    "cluster",
+    "cluster",
+    "cluster"
+  ],
+  "cluster_reward": [
+    -126967.6015625,
+    -305454.375,
+    -473339.9375,
+    -844526.125
+  ],
+  "performance_reward": [
+    -126967.6015625,
+    -305454.375,
+    -473339.9375,
+    -844526.125
+  ],
+  "final_reward": [
+    -126967.6015625,
+    -305454.375,
+    -473339.9375,
+    -844526.125
+  ]
+}

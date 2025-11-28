@@ -22,7 +22,7 @@ import gym
 gym.register(
     'SUMO-SingleIntersection-v1',
     entry_point='myrllib.envs.sumo_env:SUMOEnv',
-    max_episode_steps=14400  # 4 giờ = 14400 giây
+    max_episode_steps=3600  # 1 giờ = 3600 giây
 )
 
 from myrllib.algorithms.ddqn import DDQN
@@ -43,8 +43,8 @@ parser.add_argument('--num_periods', type=int, default=30,
         help='number of environment changes')
 parser.add_argument('--num_episodes', type=int, default=100,
         help='number of episodes per period')
-parser.add_argument('--max_steps', type=int, default=14400,
-        help='maximum steps per episode (4 giờ = 14400 giây)')
+parser.add_argument('--max_steps', type=int, default=3600,
+        help='maximum steps per episode (1 giờ = 3600 giây)')
 parser.add_argument('--lr', type=float, default=1e-3,
         help='learning rate')
 parser.add_argument('--gamma', type=float, default=0.95,

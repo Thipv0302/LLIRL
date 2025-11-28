@@ -6,22 +6,23 @@ from torch.distributions import Uniform
 from myrllib.envs.subproc_vec_env import SubprocVecEnv
 from myrllib.episodes.episode import BatchEpisodes
 
-def make_env(env_name, sumo_config_path=None, seed=0, use_gui=False):
+def make_env(env_name, sumo_config_path=None, seed=0, use_gui=False, max_steps=3600):
     def _make_env():
-        env = gym.make(env_name, sumo_config_path=sumo_config_path, use_gui=use_gui)
+        env = gym.make(env_name, sumo_config_path=sumo_config_path, use_gui=use_gui, max_steps=max_steps)
         env.seed(seed)
         return env
     return _make_env
 
 class BatchSampler(object):
-    def __init__(self, env_name, batch_size, num_workers=1, seed=0, sumo_config_path=None, use_gui=False):
+    def __init__(self, env_name, batch_size, num_workers=1, seed=0, sumo_config_path=None, use_gui=False, max_steps=3600):
         self.env_name = env_name
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.sumo_config_path = sumo_config_path
         self.use_gui = use_gui
+        self.max_steps = max_steps
         
-        self._env = gym.make(env_name, sumo_config_path=sumo_config_path, use_gui=use_gui)
+        self._env = gym.make(env_name, sumo_config_path=sumo_config_path, use_gui=use_gui, max_steps=max_steps)
         
         # Handle num_workers=0 (no multiprocessing, e.g., on Windows)
         if num_workers == 0:
@@ -29,7 +30,7 @@ class BatchSampler(object):
             self.use_multiprocessing = False
         else:
             self.queue = mp.Queue()
-            self.envs = SubprocVecEnv([make_env(env_name, sumo_config_path, seed=seed, use_gui=use_gui) for _ in range(num_workers)],
+            self.envs = SubprocVecEnv([make_env(env_name, sumo_config_path, seed=seed, use_gui=use_gui, max_steps=max_steps) for _ in range(num_workers)],
                 queue=self.queue)
             self.use_multiprocessing = True
 
@@ -53,8 +54,32 @@ class BatchSampler(object):
                         action_tensor = pi.sample()
                         action = action_tensor.cpu().numpy()[0] if action_tensor.shape[0] == 1 else action_tensor.cpu().numpy()
                     
-                    next_obs, reward, terminated, truncated, info = self._env.step(action)
-                    done = terminated or truncated
+                    try:
+                        next_obs, reward, terminated, truncated, info = self._env.step(action)
+                        done = terminated or truncated
+                    except (RuntimeError, Exception) as e:
+                        # SUMO connection error or other error, try to recover
+                        print(f"[WARNING] Error during environment step: {e}. Attempting to recover...")
+                        try:
+                            # Try to reset environment
+                            obs = self._env.reset()
+                            # Continue with zero reward for this step
+                            reward = 0.0
+                            done = False
+                            terminated = False
+                            truncated = False
+                            info = {'error': str(e), 'recovered': True}
+                            next_obs = obs
+                            print("[INFO] Environment recovered, continuing episode")
+                        except Exception as e2:
+                            # Recovery failed, end episode
+                            print(f"[ERROR] Failed to recover environment: {e2}. Ending episode.")
+                            next_obs = np.zeros(self._env.observation_space.shape, dtype=np.float32)
+                            reward = 0.0
+                            done = True
+                            terminated = True
+                            truncated = False
+                            info = {'error': str(e2), 'recovered': False}
                     episode_obs.append(obs)
                     episode_acts.append(action)
                     episode_rews.append(reward)

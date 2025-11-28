@@ -35,7 +35,7 @@ import gym
 gym.register(
     'SUMO-SingleIntersection-v1',
     entry_point='myrllib.envs.sumo_env:SUMOEnv',
-    max_episode_steps=14400  # 4 giờ = 14400 giây
+    max_episode_steps=3600  # Default, can be overridden by max_steps parameter
 )
 
 ### personal lib
@@ -71,9 +71,35 @@ parser.add_argument('--num_periods', type=int, default=30,
 parser.add_argument('--device', type=str, default='cpu')
 parser.add_argument('--et_length', type=int, default=1, 
         help='length of episodic transitions for collecting samples')
+parser.add_argument('--max_steps', type=int, default=3600,
+        help='maximum steps per episode')
 parser.add_argument('--seed', type=int, default=0)
+parser.add_argument('--zeta', type=float, default=0.5,
+        help='CRP concentration parameter (lower = easier to create new clusters)')
+parser.add_argument('--sigma', type=float, default=0.1,
+        help='Likelihood computation sigma (lower = more sensitive)')
+parser.add_argument('--tau1', type=float, default=0.5,
+        help='Temperature for likelihood normalization')
+parser.add_argument('--tau2', type=float, default=0.5,
+        help='Temperature for prior normalization')
+parser.add_argument('--em_steps', type=int, default=5,
+        help='Number of EM algorithm iterations')
 args = parser.parse_args()
 print(args)
+
+# Override hyperparameters with command line arguments if provided
+SIGMA = args.sigma
+TAU1 = args.tau1
+TAU2 = args.tau2
+EM_STEPS = args.em_steps
+ZETA = args.zeta
+print(f'\nClustering Hyperparameters:')
+print(f'  ZETA (CRP concentration): {ZETA}')
+print(f'  SIGMA (likelihood): {SIGMA}')
+print(f'  TAU1 (likelihood temp): {TAU1}')
+print(f'  TAU2 (prior temp): {TAU2}')
+print(f'  EM_STEPS: {EM_STEPS}')
+print()
 
 device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
 
@@ -104,7 +130,8 @@ def softmax_normalize(array, temperature=1.0):
 
 ######################## Hyperparameters #####################################
 ### tune these hyperparameters to get different clustering results
-SIGMA = 0.25; TAU1 = 1.0; TAU2 = 1.0; EM_STEPS = 1
+### Optimized values for better clustering (allows more clusters to be created)
+SIGMA = 0.1; TAU1 = 0.5; TAU2 = 0.5; EM_STEPS = 5; ZETA = 0.5
 
 ######################## Main Functions #######################################
 """ ENV_TYPE: the type of parameterizing the environment
@@ -128,8 +155,8 @@ sumo_config_path = os.path.abspath(args.sumo_config)
 import platform
 num_workers = 0 if platform.system() == 'Windows' else 1
 sampler = BatchSampler(env_name, args.batch_size, num_workers=num_workers, seed=args.seed, 
-                      sumo_config_path=sumo_config_path) 
-env = gym.make(env_name, sumo_config_path=sumo_config_path)
+                      sumo_config_path=sumo_config_path, max_steps=args.max_steps) 
+env = gym.make(env_name, sumo_config_path=sumo_config_path, max_steps=args.max_steps)
 # Handle num_workers=0 case (single env)
 if hasattr(sampler, 'envs') and sampler.envs is not None:
     state_dim = int(np.prod(sampler.envs.observation_space.shape))
@@ -177,7 +204,7 @@ env_model, tloss = env_nominal_train(env_model, inputs, outputs, device=device)
 env_models = [env_model]
 
 ### initilize the CRP prior distribution
-crp = CRP(zeta=1.0)
+crp = CRP(zeta=ZETA)
 
 
 '''
@@ -185,9 +212,16 @@ We train a universal model for the initialization of new environment models.
 In principle, the new environment models can be initialized in any way, 
 e.g., randomly initialization.
 
+We use a fixed number of periods (max 10) to avoid overfitting when num_periods is small,
+and to ensure the universal model is representative but not too specific.
 '''
+# Use fixed number of periods for universal model (max 10) to avoid overfitting
+# If num_periods is small, use fewer periods to avoid using all data
+universal_model_periods = min(10, max(3, args.num_periods // 2))
+print(f'Training universal model on {universal_model_periods} periods (out of {args.num_periods} total)')
+
 epi_list = []
-for idx in range(min(20, args.num_periods)):
+for idx in range(universal_model_periods):
     task = tasks[idx]; sampler.reset_task(task)
     episodes = sampler.sample(policy_uni, device=device)
     epi_list.append(episodes)
@@ -226,6 +260,22 @@ clustering_history = {
 
 for period in range(1, args.num_periods):
     print('\n----------- Time period %d--------------'%period)
+    
+    # ===== DYNAMIC ZETA: Giảm dần theo thời gian =====
+    # Bắt đầu cao (0.7) để tạo clusters sớm, giảm dần (0.3) để ổn định
+    if period == 1:
+        # Period 1: ZETA cao để dễ tạo cluster mới
+        dynamic_zeta = 0.7
+    else:
+        # Giảm dần: 0.7 → 0.3
+        dynamic_zeta = 0.7 - 0.1 * (period - 1) / max(1, args.num_periods - 2)
+        dynamic_zeta = max(0.3, min(0.7, dynamic_zeta))
+    
+    # Update CRP zeta (cần update prior tương ứng)
+    if period > 1:
+        crp._zeta = dynamic_zeta
+        print(f'Using dynamic ZETA = {dynamic_zeta:.2f} for period {period}')
+    
     L = crp._L; prior = crp._prior
     
     task = tasks[period]
@@ -288,7 +338,16 @@ for period in range(1, args.num_periods):
         for idx in range(len(env_models)):
             llls[idx] = compute_likelihood(env_models[idx], inputs, outputs, sigma=SIGMA)
         llls = softmax_normalize(llls, temperature=100)
-        posterior = llls * prior[:llls.shape[0]]
+        
+        # Safe prior slicing with validation
+        prior_len = min(len(prior), llls.shape[0])
+        if prior_len < llls.shape[0]:
+            # Pad prior with last value if needed (shouldn't happen in normal operation)
+            prior_slice = np.concatenate([prior[:prior_len], np.full(llls.shape[0] - prior_len, prior[-1] if len(prior) > 0 else 0.5)])
+        else:
+            prior_slice = prior[:llls.shape[0]]
+        
+        posterior = llls * prior_slice
         posterior = softmax_normalize(posterior, temperature=100)
         return llls, posterior
     
@@ -328,17 +387,34 @@ for period in range(1, args.num_periods):
 task_info = np.concatenate((tasks, task_ids), axis=1)
 np.save(os.path.join(args.model_path, 'task_info.npy'), task_info)
 
-# Save environment models library
+# Also save tasks separately for reproducibility
+import json
+tasks_info = {
+    'num_periods': args.num_periods,
+    'tasks': tasks.tolist(),
+    'task_ids': task_ids.flatten().tolist(),
+    'seed': args.seed
+}
+tasks_path = os.path.join(args.model_path, 'tasks_info.json')
+with open(tasks_path, 'w') as f:
+    json.dump(tasks_info, f, indent=2)
+print(f'Saved tasks info to {tasks_path}')
+
+# Save environment models library (with policy placeholders)
 print('\nSaving environment models library...')
 env_models_path = os.path.join(args.model_path, 'env_models.pth')
 torch.save({
     'env_models': [env_model.state_dict() for env_model in env_models],
+    'policies': [None] * len(env_models),  # Placeholder for policies (will be filled in policy_training.py)
     'num_models': len(env_models),
     'input_size': inputs.shape[1],
     'output_size': outputs.shape[1],
-    'hidden_sizes': (args.env_hidden_size,) * args.env_num_layers
+    'hidden_sizes': (args.env_hidden_size,) * args.env_num_layers,
+    'state_dim': state_dim,  # Save for policy creation later
+    'action_dim': action_dim  # Save for policy creation later
 }, env_models_path)
 print(f'Saved {len(env_models)} environment models to {env_models_path}')
+print(f'Note: Policies will be added during policy training phase')
 
 # Save universal initialization model
 env_model_init_path = os.path.join(args.model_path, 'env_model_init.pth')

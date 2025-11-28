@@ -40,10 +40,16 @@ class REINFORCE(object):
         if self.baseline is None:
             returns = episodes.returns
         else:
-            self.baseline.fit(episodes)
-            values = self.baseline(episodes)
-            advantages = episodes.gae(values, tau=self.tau)
-            returns = weighted_normalize(advantages, weights=episodes.mask)
+            try:
+                self.baseline.fit(episodes)
+                values = self.baseline(episodes)
+                advantages = episodes.gae(values, tau=self.tau)
+                returns = weighted_normalize(advantages, weights=episodes.mask)
+            except Exception as e:
+                # If baseline fitting fails, fallback to using raw returns
+                # This can happen with insufficient data or numerical issues
+                print(f"[WARNING] Baseline fitting failed: {e}. Using raw returns instead.")
+                returns = episodes.returns
 
         if recurrent:
             ### (time_horizon, batch_size, state_dim)

@@ -21,7 +21,7 @@ import gym
 gym.register(
     'SUMO-SingleIntersection-v1',
     entry_point='myrllib.envs.sumo_env:SUMOEnv',
-    max_episode_steps=14400  # 4 giờ = 14400 giây
+    max_episode_steps=3600  # 1 giờ = 3600 giây
 )
 
 from myrllib.episodes.episode import BatchEpisodes

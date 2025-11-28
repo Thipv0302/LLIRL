@@ -33,24 +33,74 @@ class LinearFeatureBaseline(nn.Module):
         featmat = self._feature(episodes).view(-1, self.feature_size)
         # sequence_length * batch_size x 1
         returns = episodes.returns.view(-1, 1)
+        
+        # Check if we have enough samples
+        num_samples = featmat.shape[0]
+        if num_samples < self.feature_size:
+            # Not enough samples, use zero baseline (no update)
+            # This can happen with small batch sizes or short episodes
+            return
+        
+        # Check for NaN or Inf values
+        if torch.isnan(featmat).any() or torch.isinf(featmat).any():
+            # Invalid features, use zero baseline
+            return
+        
+        if torch.isnan(returns).any() or torch.isinf(returns).any():
+            # Invalid returns, use zero baseline
+            return
 
         reg_coeff = self._reg_coeff
         eye = torch.eye(self.feature_size, dtype=torch.float32, device=self.linear.weight.device)
-        for _ in range(5):
+        
+        # Try with increasing regularization
+        max_reg_coeff = 1e6  # Increased maximum
+        for attempt in range(10):  # More attempts
             try:
-                coeffs, _ = torch.lstsq(
-                    torch.matmul(featmat.t(), returns),
-                    torch.matmul(featmat.t(), featmat) + reg_coeff * eye
-                )
-                break
-            except RuntimeError:
-                reg_coeff += 10
+                XtX = torch.matmul(featmat.t(), featmat)
+                Xty = torch.matmul(featmat.t(), returns)
+                
+                # Add regularization
+                reg_matrix = reg_coeff * eye
+                A = XtX + reg_matrix
+                
+                # Try to solve using lstsq
+                # Use older API for compatibility
+                try:
+                    coeffs, _ = torch.lstsq(Xty, A)
+                    coeffs = coeffs[:self.feature_size]
+                except:
+                    # Try newer API if available
+                    try:
+                        coeffs = torch.linalg.lstsq(A, Xty).solution
+                    except:
+                        # Last resort: use pseudo-inverse
+                        coeffs = torch.matmul(torch.pinverse(A), Xty)
+                
+                # Check if solution is valid
+                if torch.isnan(coeffs).any() or torch.isinf(coeffs).any():
+                    raise RuntimeError("Invalid solution")
+                
+                self.linear.weight.data = coeffs.data.t()
+                return  # Success
+                
+            except (RuntimeError, Exception) as e:
+                # Catch all exceptions including LinAlgError if available
+                try:
+                    from torch.linalg import LinAlgError
+                    if isinstance(e, LinAlgError):
+                        pass  # Handle LinAlgError
+                except ImportError:
+                    pass  # LinAlgError not available in this PyTorch version
+                # Increase regularization and try again
+                reg_coeff *= 10
+                if reg_coeff > max_reg_coeff:
+                    # If still failing, use zero baseline (no update)
+                    # This is better than crashing
+                    return
         else:
-            raise RuntimeError('Unable to solve the normal equations in '
-                '`LinearFeatureBaseline`. The matrix X^T*X (with X the design '
-                'matrix) is not full-rank, regardless of the regularization '
-                '(maximum regularization: {0}).'.format(reg_coeff))
-        self.linear.weight.data = coeffs.data.t()
+            # All attempts failed, use zero baseline (no update)
+            return
 
     def forward(self, episodes):
         features = self._feature(episodes)

@@ -22,7 +22,7 @@ class SUMOEnv(gym.Env):
     """
     SUMO Environment for traffic light control at single intersection
     """
-    def __init__(self, sumo_config_path, max_steps=14400, yellow_time=3, green_time_min=10, green_time_max=60):
+    def __init__(self, sumo_config_path, max_steps=3600, yellow_time=3, green_time_min=10, green_time_max=60):
         super(SUMOEnv, self).__init__()
         
         self.sumo_config_path = sumo_config_path

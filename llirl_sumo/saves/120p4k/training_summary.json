@@ -1,0 +1,14 @@
+{
+  "total_periods": 5,
+  "num_clusters": 1,
+  "num_iterations_per_period": 50,
+  "algorithm": "reinforce",
+  "learning_rate": 0.003,
+  "optimizer": "adam",
+  "hidden_size": 200,
+  "num_layers": 2,
+  "final_average_reward": -844526.125,
+  "best_period_reward": -126967.6015625,
+  "best_period": 2,
+  "training_time_minutes": 333.82405053774517
+}
