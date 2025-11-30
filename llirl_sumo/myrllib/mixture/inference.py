@@ -58,10 +58,8 @@ def compute_likelihood(env_model, inputs, outputs, sigma=0.25):
     posterior = likelihood * prior
     '''
     env_model.eval()
-    # Get device from model to ensure consistency
-    model_device = next(env_model.parameters()).device
-    inputs = torch.FloatTensor(inputs).to(model_device)
-    outputs = torch.FloatTensor(outputs).to(model_device)
+    inputs = torch.FloatTensor(inputs); outputs = torch.FloatTensor(outputs)
+    if torch.cuda.is_available(): inputs = inputs.cuda(); outputs = outputs.cuda()
     pre_out = env_model(inputs)
 
     a = - torch.sum(torch.mul(pre_out - outputs, pre_out - outputs), dim=1) / (2*sigma*sigma)

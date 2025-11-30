@@ -1,0 +1,44 @@
+{
+  "DDQN": {
+    "avg_waiting_time": 0.758868238557559,
+    "max_waiting_time": 0.9,
+    "avg_speed": 5.041844660194174,
+    "max_speed": 15.39,
+    "min_speed": -1.0,
+    "avg_queue_length": 28.778085991678225,
+    "max_queue_length": 116.0,
+    "total_arrived": 2023.0,
+    "total_inserted": 2177.0,
+    "throughput_ratio": 0.9292604501607717,
+    "avg_running": 57.309292649098474,
+    "max_running": 157.0
+  },
+  "LLIRL": {
+    "avg_waiting_time": 0.7917004160887656,
+    "max_waiting_time": 1.94,
+    "avg_speed": 4.768188626907073,
+    "max_speed": 14.04,
+    "min_speed": -1.0,
+    "avg_queue_length": 41.57975034674064,
+    "max_queue_length": 150.0,
+    "total_arrived": 1883.0,
+    "total_inserted": 2040.0,
+    "throughput_ratio": 0.9230392156862746,
+    "avg_running": 68.324826629681,
+    "max_running": 172.0
+  },
+  "PPO": {
+    "avg_waiting_time": 0.7917004160887656,
+    "max_waiting_time": 1.94,
+    "avg_speed": 4.768188626907073,
+    "max_speed": 14.04,
+    "min_speed": -1.0,
+    "avg_queue_length": 41.57975034674064,
+    "max_queue_length": 150.0,
+    "total_arrived": 1883.0,
+    "total_inserted": 2040.0,
+    "throughput_ratio": 0.9230392156862746,
+    "avg_running": 68.324826629681,
+    "max_running": 172.0
+  }
+}

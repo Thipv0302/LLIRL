@@ -4,7 +4,6 @@ Resume LLIRL training from checkpoint
 
 import sys
 import os
-import gym
 import numpy as np
 import argparse
 import torch

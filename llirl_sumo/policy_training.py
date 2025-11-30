@@ -10,7 +10,6 @@ This file is the implementation of the policy learning part of the proposed LLIR
 ### common lib
 import sys
 import os
-import gym
 import numpy as np
 import argparse 
 import torch
@@ -21,6 +20,9 @@ import pickle
 import random
 import signal
 import atexit
+import gc
+import json
+import platform
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -31,13 +33,13 @@ import gym
 gym.register(
     'SUMO-SingleIntersection-v1',
     entry_point='myrllib.envs.sumo_env:SUMOEnv',
-    max_episode_steps=3600  # Default, can be overridden by max_steps parameter
+    max_episode_steps=14400  # Thay đổi từ 3600 thành 14400 (4 giờ)
 )
 
 ### personal lib
 from myrllib.episodes.episode import BatchEpisodes 
 from myrllib.samplers.sampler import BatchSampler 
-from myrllib.policies import NormalMLPPolicy, UniformPolicy  
+from myrllib.policies import NormalMLPPolicy  
 from myrllib.baselines.baseline import LinearFeatureBaseline
 from myrllib.algorithms.reinforce import REINFORCE 
 from myrllib.algorithms.trpo import TRPO 
@@ -70,8 +72,8 @@ parser.add_argument('--model_path', type=str, default='saves/sumo_single_interse
 parser.add_argument('--sumo_config', type=str, 
         default='../nets/single-intersection/run_morning_6to10.sumocfg',
         help='path to SUMO configuration file')
-parser.add_argument('--algorithm', type=str, default='ppo',
-        help='reinforce, trpo, or ppo (ppo recommended for stability)')
+parser.add_argument('--algorithm', type=str, default='reinforce',
+        help='reinforce or trpo, the base algorithm for policy gradient')
 parser.add_argument('--opt', type=str, default='sgd',
         help='sgd or adam, if using the reinforce algorithm')
 parser.add_argument('--baseline', type=str, default=None,
@@ -85,28 +87,20 @@ parser.add_argument('--num_test_episodes', type=int, default=3,
         help='Number of episodes to test policies')
 parser.add_argument('--policy_eval_weight', type=float, default=0.5,
         help='Weight for policy evaluation vs cluster selection (0=cluster only, 1=eval only)')
-parser.add_argument('--max_steps', type=int, default=3600,
-        help='maximum steps per episode')
-parser.add_argument('--lr_decay', type=float, default=0.95,
-        help='Learning rate decay factor per period (1.0 = no decay)')
+parser.add_argument('--max_steps', type=int, default=7200,
+        help='Maximum number of steps per episode')
+parser.add_argument('--use_baseline', action='store_true', default=False,
+        help='Whether to use a baseline for variance reduction')
+parser.add_argument('--lr_decay', type=float, default=0.98,
+        help='Learning rate decay factor per period')
 parser.add_argument('--lr_min', type=float, default=1e-5,
         help='Minimum learning rate')
 parser.add_argument('--early_stop_patience', type=int, default=10,
-        help='Early stopping patience (0 = disabled)')
+        help='Number of iterations to wait before early stopping')
 parser.add_argument('--early_stop_threshold', type=float, default=0.01,
-        help='Early stopping threshold (improvement < threshold)')
-parser.add_argument('--use_baseline', action='store_true', default=False,
-        help='Use linear baseline for variance reduction')
+        help='Threshold for early stopping based on performance improvement')
 parser.add_argument('--grad_clip', type=float, default=0.5,
-        help='Gradient clipping value (0 = disabled)')
-parser.add_argument('--clip', type=float, default=0.2,
-        help='PPO clip parameter (only for PPO algorithm)')
-parser.add_argument('--epochs', type=int, default=5,
-        help='PPO epochs per update (only for PPO algorithm)')
-parser.add_argument('--tau', type=float, default=1.0,
-        help='GAE tau parameter (only for PPO/REINFORCE with baseline)')
-parser.add_argument('--ddqn_init_path', type=str, default=None,
-        help='Path to DDQN model for policy initialization (transfer learning)')
+        help='Gradient clipping value')
 args = parser.parse_args()
 print(args)
 
@@ -132,21 +126,16 @@ np.set_printoptions(precision=3)
 ######################## Small functions ######################################
 ### build a learner given a policy network
 def generate_learner(policy):
-    # Use baseline if enabled
-    baseline_type = 'linear' if args.use_baseline else (args.baseline if args.baseline else None)
-    
     if args.algorithm == 'trpo':
-        learner = TRPO(policy, baseline=baseline_type, device=device)
+        learner = TRPO(policy, baseline=args.baseline, device=device)
     elif args.algorithm == 'ppo':
-        # PPO with proper parameters
-        learner = PPO(policy, baseline=baseline_type, lr=args.lr, opt=args.opt, 
-                     clip=args.clip, epochs=args.epochs, tau=args.tau, device=device)
+        learner = PPO(policy, baseline=args.baseline, lr=args.lr, opt=args.opt, device=device)
     else:
-        learner = REINFORCE(policy, baseline=baseline_type, lr=args.lr, opt=args.opt, device=device)
+        learner = REINFORCE(policy, baseline=args.baseline, lr=args.lr, opt=args.opt, device=device)
     return learner 
 
-### train a policy using a learner with optimizations
-def inner_train(policy, learner, period=0, track_metrics=True, initial_lr=None):
+### train a policy using a learner
+def inner_train(policy, learner, period=0, track_metrics=True):
     rews = np.zeros(args.num_iter)
     iteration_metrics = {
         'rewards': [],
@@ -154,16 +143,6 @@ def inner_train(policy, learner, period=0, track_metrics=True, initial_lr=None):
         'losses': [],
         'learning_rates': []
     }
-    
-    # Early stopping variables
-    best_reward = float('-inf')
-    patience_counter = 0
-    best_iter = 0
-    
-    # Learning rate scheduling
-    if initial_lr is None and hasattr(learner, 'opt') and learner.opt is not None:
-        if len(learner.opt.param_groups) > 0:
-            initial_lr = learner.opt.param_groups[0]['lr']
     
     for idx in tqdm(range(args.num_iter)):
         episodes = sampler.sample(policy, device=device)
@@ -184,50 +163,10 @@ def inner_train(policy, learner, period=0, track_metrics=True, initial_lr=None):
                 iteration_metrics['gradient_norms'].append(float(total_norm))
                 
                 # Track learning rate
-                if len(learner.opt.param_groups) > 0:
+                if hasattr(learner.opt, 'param_groups') and len(learner.opt.param_groups) > 0:
                     iteration_metrics['learning_rates'].append(float(learner.opt.param_groups[0]['lr']))
         
-        # Apply gradient clipping if enabled
-        clip_value = args.grad_clip if args.grad_clip > 0 else None
-        learner.step(episodes, clip=(clip_value is not None))
-        # Additional gradient clipping after step if needed (some algorithms do it internally)
-        if clip_value and hasattr(learner, 'opt') and learner.opt is not None:
-            # Check if gradients exist and clip them
-            if any(p.grad is not None for p in policy.parameters()):
-                torch.nn.utils.clip_grad_norm_(policy.parameters(), clip_value)
-        
-        # Learning rate decay (exponential decay)
-        if initial_lr and hasattr(learner, 'opt') and learner.opt is not None:
-            if len(learner.opt.param_groups) > 0:
-                current_lr = initial_lr * (args.lr_decay ** (idx / max(1, args.num_iter // 10)))
-                current_lr = max(current_lr, args.lr_min)
-                for param_group in learner.opt.param_groups:
-                    param_group['lr'] = current_lr
-        
-        # Early stopping
-        if args.early_stop_patience > 0:
-            if reward > best_reward + args.early_stop_threshold:
-                best_reward = reward
-                patience_counter = 0
-                best_iter = idx
-            else:
-                patience_counter += 1
-                if patience_counter >= args.early_stop_patience:
-                    print(f'\n[Early Stop] No improvement for {args.early_stop_patience} iterations. '
-                          f'Best reward: {best_reward:.4f} at iteration {best_iter}')
-                    # Truncate arrays
-                    rews = rews[:idx+1]
-                    for key in iteration_metrics:
-                        if len(iteration_metrics[key]) > idx+1:
-                            iteration_metrics[key] = iteration_metrics[key][:idx+1]
-                    break
-    
-    # Ensure rews has correct length (pad with last value if early stopped)
-    # This ensures consistent array shape for rews_llirl
-    if len(rews) < args.num_iter:
-        # Pad with last value for consistency (replicates final performance)
-        last_value = rews[-1] if len(rews) > 0 else 0.0
-        rews = np.pad(rews, (0, args.num_iter - len(rews)), mode='constant', constant_values=last_value)
+        learner.step(episodes, clip=True)
     
     return rews, iteration_metrics
 
@@ -237,7 +176,6 @@ def inner_train(policy, learner, period=0, track_metrics=True, initial_lr=None):
 env_name = 'SUMO-SingleIntersection-v1'
 sumo_config_path = os.path.abspath(args.sumo_config)
 # Use num_workers=0 on Windows to avoid multiprocessing issues
-import platform
 num_workers = 0 if platform.system() == 'Windows' else 1
 sampler = BatchSampler(env_name, args.batch_size, num_workers=num_workers, seed=args.seed,
                       sumo_config_path=sumo_config_path, max_steps=args.max_steps) 
@@ -253,83 +191,33 @@ print('state dim: %d; action dim: %d'%(state_dim,action_dim))
 ### get the task ids that are computed using env_clustering.py
 task_info_path = os.path.join(args.model_path, 'task_info.npy')
 if not os.path.exists(task_info_path):
-    raise FileNotFoundError(f'task_info.npy not found at {task_info_path}. Please run env_clustering.py first.')
-
+    raise FileNotFoundError(
+        f'Task info file not found at {task_info_path}. '
+        f'Please run env_clustering.py first to generate task_info.npy'
+    )
 task_info = np.load(task_info_path)
-if task_info.shape[1] < 2:
-    raise ValueError(f'Invalid task_info.npy format: expected at least 2 columns, got {task_info.shape[1]}')
-
 tasks = task_info[:, :-1]
 task_ids = task_info[:, -1]
 
-# Validate task_ids
-if len(tasks) != len(task_ids):
-    raise ValueError(f'Task dimension mismatch: {len(tasks)} tasks but {len(task_ids)} task_ids')
-if len(tasks) == 0:
-    raise ValueError('No tasks found in task_info.npy')
-if task_ids[0] != 1:
-    raise ValueError(f'First task_id must be 1, got {task_ids[0]}')
-
-# Validate num_periods consistency
-num_periods_from_task_info = len(tasks)
-if args.num_periods != num_periods_from_task_info:
-    print(f'\n[WARNING] num_periods mismatch!')
-    print(f'  Command line: {args.num_periods}')
-    print(f'  From task_info.npy: {num_periods_from_task_info}')
-    print(f'  Using {num_periods_from_task_info} from task_info.npy\n')
-    args.num_periods = num_periods_from_task_info
-
-# Load mixture library (env_models.pth) to get both env_models and policies
-env_models_path = os.path.join(args.model_path, 'env_models.pth')
-mixture_library = None
-if os.path.exists(env_models_path):
-    try:
-        mixture_library = torch.load(env_models_path, map_location=device)
-        if not isinstance(mixture_library, dict):
-            raise ValueError(f'mixture_library must be a dict, got {type(mixture_library)}')
-        if 'num_models' not in mixture_library:
-            print('[WARNING] num_models not found in mixture_library, assuming 0')
-            mixture_library['num_models'] = 0
-        print(f'Loaded mixture library with {mixture_library.get("num_models", 0)} clusters')
-        if 'policies' in mixture_library:
-            if not isinstance(mixture_library['policies'], list):
-                raise ValueError(f'policies must be a list, got {type(mixture_library["policies"])}')
-            num_policies_in_library = sum(1 for p in mixture_library['policies'] if p is not None)
-            print(f'Found {num_policies_in_library} policies in mixture library')
-    except Exception as e:
-        print(f'[WARNING] Error loading mixture library: {e}. Will create new mixture library.')
-        mixture_library = None
-else:
-    print('[WARNING] env_models.pth not found. Will create new mixture library.')
+# Validate task_info
+if len(tasks) < args.num_periods:
+    print(f'[WARNING] task_info has {len(tasks)} periods but num_periods={args.num_periods}')
+    print(f'  -> Will use {len(tasks)} periods available')
+    args.num_periods = len(tasks)
 
 # Load CRP state để có priors cho general policy
-from myrllib.mixture.inference import CRP
-import pickle
 crp_path = os.path.join(args.model_path, 'crp_state.pkl')
 crp = None
 if os.path.exists(crp_path):
-    try:
-        with open(crp_path, 'rb') as f:
-            crp_data = pickle.load(f)
-        if not isinstance(crp_data, dict):
-            raise ValueError(f'CRP data must be a dict, got {type(crp_data)}')
-        crp = CRP(zeta=crp_data.get('zeta', 1.0))
-        crp._L = int(crp_data.get('L', 1))
-        crp._t = int(crp_data.get('t', 1))
-        prior_data = crp_data.get('prior', [0.5, 0.5])
-        if isinstance(prior_data, list):
-            crp._prior = np.array(prior_data)
-        else:
-            crp._prior = np.array(prior_data)
-        # Validate prior
-        if len(crp._prior) < 1:
-            raise ValueError(f'CRP prior must have at least 1 element, got {len(crp._prior)}')
-        if not np.all(crp._prior >= 0):
-            raise ValueError('CRP prior must be non-negative')
-        print(f'Loaded CRP state: L={crp._L}, t={crp._t}, prior_len={len(crp._prior)}')
-    except Exception as e:
-        print(f'[WARNING] Error loading CRP state: {e}. Will use default CRP.')
-        crp = None
+    with open(crp_path, 'rb') as f:
+        crp_data = pickle.load(f)
+    crp = CRP(zeta=crp_data.get('zeta', 1.0))
+    crp._L = crp_data.get('L', 1)
+    crp._t = crp_data.get('t', 1)
+    crp._prior = np.array(crp_data.get('prior', [0.5, 0.5]))
+    print(f'Loaded CRP state: L={crp._L}, t={crp._t}, prior shape={crp._prior.shape}')
+else:
+    print(f'[WARNING] CRP state not found at {crp_path}. General policy will use uniform priors.')
 
 print('====== Lifelong Incremental Reinforcement Learning (LLIRL) =======')
 
@@ -353,7 +241,7 @@ def save_intermediate_results():
         print('='*60)
         
         # Save current rewards
-        if 'rews_llirl' in globals() and len(rews_llirl) > 0 and not np.all(rews_llirl == 0):
+        if 'rews_llirl' in globals() and rews_llirl.sum() != 0:
             np.save(os.path.join(args.output, 'rews_llirl.npy'), rews_llirl)
             print(f'[OK] Saved rewards to {args.output}/rews_llirl.npy')
         
@@ -394,36 +282,12 @@ print('The nominal task:', tasks[0])
 sampler.reset_task(tasks[0])
 
 ### generate the nominal policy model at the first time period
-# Try to initialize from DDQN if available (Transfer Learning)
-if args.ddqn_init_path and os.path.exists(args.ddqn_init_path):
-    print(f'\n[TRANSFER LEARNING] Initializing policy from DDQN: {args.ddqn_init_path}')
-    try:
-        from utils.ddqn_to_policy import convert_ddqn_to_policy
-        policy_init, success = convert_ddqn_to_policy(
-            args.ddqn_init_path, state_dim, action_dim,
-            hidden_sizes=(args.hidden_size,) * args.num_layers,
-            device=device
-        )
-        if success:
-            print('✓ Policy initialized from DDQN (Transfer Learning)')
-        else:
-            print('[WARNING] DDQN conversion failed, using random initialization')
-    except Exception as e:
-        print(f'[WARNING] Failed to load DDQN for transfer learning: {e}')
-        print('  Using random initialization instead')
 policy_init = NormalMLPPolicy(state_dim, action_dim, 
         hidden_sizes=(args.hidden_size,) * args.num_layers)
-else:
-    policy_init = NormalMLPPolicy(state_dim, action_dim, 
-            hidden_sizes=(args.hidden_size,) * args.num_layers)
-
 learner_init = generate_learner(policy_init)
 
 ### record the performance 
-# Initialize with correct shape, handling variable iteration counts due to early stopping
 rews_llirl = np.zeros((args.num_periods, args.num_iter))
-# Track actual iteration counts per period (for early stopping)
-actual_iterations = [args.num_iter] * args.num_periods
 
 # Track optimal parameters and performance for each period
 optimal_period_data = {
@@ -452,12 +316,7 @@ training_metrics = {
 
 ### training the nominal policy model 
 print('Train the nominal model...')
-# Get initial learning rate for scheduling
-initial_lr = args.lr
-if hasattr(learner_init, 'opt') and learner_init.opt is not None:
-    if len(learner_init.opt.param_groups) > 0:
-        initial_lr = learner_init.opt.param_groups[0]['lr']
-rews_init, init_metrics = inner_train(policy_init, learner_init, period=0, track_metrics=True, initial_lr=initial_lr)
+rews_init, init_metrics = inner_train(policy_init, learner_init, period=0, track_metrics=True)
 
 # Store initial period metrics
 training_metrics['periods'].append(0)
@@ -471,43 +330,10 @@ training_metrics['policy_gradients_norm'].append(init_metrics.get('gradient_norm
 training_metrics['learning_rates'].append(init_metrics.get('learning_rates', []))
 
 ### initialize the Dirichlet mixture model
-# Load policies from mixture library if available
-policies = [policy_init]
-learners = [learner_init]
+policies = [policy_init]; learners = [learner_init]
 num_policies = 1
 
-# Try to load existing policies from mixture library
-if mixture_library is not None and 'policies' in mixture_library:
-    library_policies = mixture_library['policies']
-    num_clusters = mixture_library.get('num_models', len(library_policies))
-    
-    # Load policies for existing clusters (skip first one as we already have policy_init)
-    for cluster_idx in range(1, num_clusters):
-        if cluster_idx < len(library_policies) and library_policies[cluster_idx] is not None:
-            # Load policy from mixture library
-            policy = NormalMLPPolicy(state_dim, action_dim, 
-                    hidden_sizes=(args.hidden_size,) * args.num_layers)
-            policy.load_state_dict(library_policies[cluster_idx])
-            policies.append(policy)
-            learners.append(generate_learner(policy))
-            num_policies += 1
-            print(f'Loaded policy for cluster {cluster_idx + 1} from mixture library')
-        else:
-            # No policy yet for this cluster, will create during training
-            policies.append(None)
-            learners.append(None)
-            print(f'No policy found for cluster {cluster_idx + 1}, will create during training')
-    
-    # Ensure we have the right number of policies (match number of clusters)
-    while len(policies) < num_clusters:
-        policies.append(None)
-        learners.append(None)
-    
-    if num_policies > 1:
-        print(f'Loaded {num_policies - 1} additional policies from mixture library')
-
 rews_llirl[0] = rews_init
-_completed_periods = 1  # Period 0 is completed
 
 # Track optimal for period 0 (nominal) and save snapshot
 optimal_reward_init = float(rews_init.max())
@@ -553,6 +379,12 @@ policy_selection_history = {
 try:
     for period in range(1, args.num_periods):
         print('\n----------- Time period %d------'%(period+1))
+        
+        # Validate period index
+        if period >= len(tasks):
+            print(f'[WARNING] Period {period+1} exceeds available tasks ({len(tasks)}). Stopping.')
+            break
+            
         task = tasks[period]
         print('The task information:', task) 
         sampler.reset_task(task)
@@ -561,19 +393,19 @@ try:
         
         # Validate task_id
         if task_id < 1:
-            raise ValueError(f'Invalid task_id: {task_id} (must be >= 1)')
+            raise ValueError(f'Invalid task_id: {task_id} (must be >= 1) at period {period+1}')
+        if task_id > num_policies + 1:
+            print(f'[WARNING] task_id {task_id} > num_policies + 1 ({num_policies + 1}) at period {period+1}')
+            print(f'  -> Treating as new cluster, creating policy...')
+            task_id = num_policies + 1
         
-        # Step 1: Cluster-based selection - Lấy policy từ mixture library
+        # Step 1: Cluster-based selection (cách cũ)
         cluster_policy = None
         cluster_reward = None
-        if 1 <= task_id <= len(policies):
-            # Lấy policy từ mixture library (policies list)
-            if policies[task_id-1] is not None:
-                cluster_policy = policies[task_id-1]
-                print(f'Cluster-based selection: Policy {task_id} from mixture library')
-            else:
-                print(f'Cluster {task_id} exists but has no policy yet, will create new policy')
-        elif task_id == len(policies) + 1:
+        if task_id <= num_policies:
+            cluster_policy = policies[task_id-1]
+            print(f'Cluster-based selection: Policy {task_id}')
+        elif task_id == num_policies + 1:
             print('New cluster detected, will create new policy')
         
         # Step 2: Performance-based selection (nếu enabled)
@@ -586,49 +418,31 @@ try:
         if args.use_general_policy and num_policies > 0:
             print('\n--- Policy Evaluation Phase ---')
             
-            # Tạo general policy từ weighted average (chỉ dùng policies không None)
-            valid_policies = [p for p in policies if p is not None]
-            if len(valid_policies) > 0:
-                if crp is not None and len(crp._prior) >= len(valid_policies):
-                    priors = crp._prior[:len(valid_policies)].tolist()
+            # Tạo general policy từ weighted average
+            # Normalize priors: prior[policy] / (tổng prior) * tham số của policy
+            if crp is not None and len(crp._prior) >= num_policies:
+                priors_raw = crp._prior[:num_policies]
+                # Normalize: prior[i] / sum(priors)
+                priors_sum = priors_raw.sum()
+                if priors_sum > 0:
+                    priors = (priors_raw / priors_sum).tolist()
                 else:
-                    priors = [1.0 / len(valid_policies)] * len(valid_policies)
-                
-                general_policy = create_general_policy(
-                    valid_policies, priors, state_dim, action_dim, 
-                    (args.hidden_size,) * args.num_layers,
-                    device=device
-                )
+                    priors = [1.0 / num_policies] * num_policies
             else:
-                print('[WARNING] No valid policies available for general policy creation')
-                general_policy = None
+                priors = [1.0 / num_policies] * num_policies
             
-            # Collect episodes và evaluate policies
-            test_episodes_list = []
-            valid_policies = [p for p in policies if p is not None]
-            all_policies_to_test = valid_policies
+            general_policy = create_general_policy(
+                policies, priors, state_dim, action_dim, 
+                (args.hidden_size,) * args.num_layers,
+                device=device
+            )
+            print('Created general policy from weighted average')
             
-            if general_policy is not None:
-                print('Created general policy from weighted average')
-                # Collect episodes với general policy để test
-                print(f'Collecting {args.num_test_episodes} episodes with general policy...')
-                for _ in range(args.num_test_episodes):
-                    episodes = sampler.sample(general_policy, device=device)
-                    test_episodes_list.append(episodes)
-                all_policies_to_test = all_policies_to_test + [general_policy]
-            else:
-                print('[INFO] General policy is None, skipping general policy evaluation')
-            
-            # Evaluate tất cả policies (bao gồm general policy nếu có) - chỉ dùng policies không None
-            if len(all_policies_to_test) > 0:
-                best_policy, best_reward, policy_rewards = evaluate_policies(
-                    all_policies_to_test, sampler, args.num_test_episodes, device
-                )
-            else:
-                print('[WARNING] No policies to evaluate')
-                best_policy = None
-                best_reward = -np.inf
-                policy_rewards = {}
+            # Evaluate tất cả policies (bao gồm general policy)
+            all_policies_to_test = policies + [general_policy]
+            best_policy, best_reward, policy_rewards = evaluate_policies(
+                all_policies_to_test, sampler, args.num_test_episodes, device
+            )
             
             if best_policy is not None:
                 performance_policy = best_policy
@@ -681,129 +495,109 @@ try:
                 policy.load_state_dict(general_policy.state_dict())
                 print('Initialized new policy from general policy')
             else:
-                # Fallback: random existing policy (skip None policies)
-                valid_policy_indices = [i for i, p in enumerate(policies) if p is not None]
-                if len(valid_policy_indices) > 0:
-                    index = np.random.choice(valid_policy_indices)
-                    policy.load_state_dict(policies[index].state_dict())
-                    print(f'Initialized new policy from random existing policy {index}')
-                else:
-                    print('No existing policies available, using random initialization')
+                # Fallback: random existing policy
+                index = np.random.choice(num_policies)
+                policy.load_state_dict(policies[index].state_dict())
+                print(f'Initialized new policy from random existing policy {index}')
             
             learner = generate_learner(policy)
-            # Get initial learning rate for scheduling (with decay per period)
-            period_lr = args.lr * (args.lr_decay ** period)
-            period_lr = max(period_lr, args.lr_min)
-            if hasattr(learner, 'opt') and learner.opt is not None:
-                if len(learner.opt.param_groups) > 0:
-                    learner.opt.param_groups[0]['lr'] = period_lr
-            rews, period_metrics = inner_train(policy, learner, period=period, track_metrics=True, initial_lr=period_lr)
+            rews, period_metrics = inner_train(policy, learner, period=period, track_metrics=True)
             policies.append(policy)
             learners.append(learner)
             num_policies += 1
             
-            # Update mixture library with new policy
-            if mixture_library is not None:
-                # Ensure policies list is long enough
-                while len(mixture_library['policies']) < len(policies):
-                    mixture_library['policies'].append(None)
-                # Validate task_id before accessing
-                if not (1 <= task_id <= len(mixture_library['policies'])):
-                    raise ValueError(f'Invalid task_id {task_id} for mixture_library access (len={len(mixture_library["policies"])})')
-                mixture_library['policies'][task_id - 1] = policy.state_dict()
-                mixture_library['num_models'] = len(policies)
-                print(f'Updated mixture library: added policy for cluster {task_id}')
-            
         elif task_id <= num_policies:
-            # Validate task_id before accessing policies
-            if not (1 <= task_id <= len(policies)):
-                raise ValueError(f'Invalid task_id: {task_id} for policies access (len={len(policies)})')
+            # Lưu policy gốc của cluster để không mất lịch sử
+            original_cluster_policy = policies[task_id-1]
+            original_cluster_learner = learners[task_id-1]
             
-            # Check if policy exists for this cluster
-            if policies[task_id-1] is None:
-                # Edge case: Cluster exists but policy not yet created - create new policy
-                print(f'Cluster {task_id} exists but has no policy yet. Creating new policy...')
-                policy = NormalMLPPolicy(state_dim, action_dim, 
-                        hidden_sizes=(args.hidden_size,) * args.num_layers)
+            # Chọn policy dựa trên selection method
+            policy_idx = None  # Index của policy được chọn trong policies list
+            is_using_general_policy = False
+            is_using_own_cluster_policy = False
+            
+            if selected_policy is not None and selection_method == 'performance':
+                # Sử dụng performance-based policy
+                # Tìm learner tương ứng
+                for idx, p in enumerate(policies):
+                    if p is selected_policy:
+                        policy_idx = idx
+                        break
                 
-                # Initialize from best policy (similar to new cluster case)
-                if performance_policy is not None and general_policy is not None and performance_policy != general_policy:
-                    policy.load_state_dict(performance_policy.state_dict())
-                    print('Initialized new policy from best performance policy')
-                elif general_policy is not None:
-                    policy.load_state_dict(general_policy.state_dict())
-                    print('Initialized new policy from general policy')
-                else:
-                    # Fallback: random existing policy (skip None policies)
-                    valid_policy_indices = [i for i, p in enumerate(policies) if p is not None]
-                    if len(valid_policy_indices) > 0:
-                        index = np.random.choice(valid_policy_indices)
-                        policy.load_state_dict(policies[index].state_dict())
-                        print(f'Initialized new policy from random existing policy {index}')
-                    else:
-                        print('No existing policies available, using random initialization')
-                
-                learner = generate_learner(policy)
-                # Update policies list with newly created policy
-                policies[task_id-1] = policy
-                learners[task_id-1] = learner
-            else:
-                # Policy exists - use selection method
-                # Chọn policy dựa trên selection method
-                if selected_policy is not None and selection_method == 'performance':
-                    # Sử dụng performance-based policy
-                    policy = selected_policy
-                    # Tìm learner tương ứng
-                    policy_idx = None
-                    for idx, p in enumerate(policies):
-                        if p is selected_policy:
-                            policy_idx = idx
-                            break
+                if policy_idx is not None:
+                    # Policy từ library được chọn
+                    is_using_own_cluster_policy = (policy_idx == task_id - 1)
                     
-                    if policy_idx is not None:
+                    if is_using_own_cluster_policy:
+                        # Dùng chính policy của cluster này → không cần clone
+                        policy = selected_policy
                         learner = learners[policy_idx]
-                        print(f'Using performance-selected policy (index {policy_idx})')
-                    elif general_policy is not None and selected_policy == general_policy:
-                        # Policy là general policy, tạo learner mới hoặc dùng cluster policy's learner
-                        learner = generate_learner(policy)
-                        print('Using general policy, created new learner')
+                        print(f'Using performance-selected policy (index {policy_idx}, cluster {policy_idx+1})')
+                        print(f'  -> Selected policy belongs to current cluster {task_id}')
                     else:
-                        # Fallback to cluster policy
-                        policy = policies[task_id-1]
-                        learner = learners[task_id-1]
-                        print(f'Fallback to cluster-based policy {task_id}')
+                        # Policy từ cluster khác → cần clone để không ảnh hưởng policy gốc
+                        policy = NormalMLPPolicy(state_dim, action_dim, 
+                                hidden_sizes=(args.hidden_size,) * args.num_layers)
+                        policy.load_state_dict(selected_policy.state_dict())
+                        learner = generate_learner(policy)
+                        print(f'Using performance-selected policy (index {policy_idx}, cluster {policy_idx+1})')
+                        print(f'  -> Selected policy belongs to different cluster {policy_idx+1}')
+                        print(f'  -> Cloned policy to avoid in-place updates')
+                elif general_policy is not None and selected_policy == general_policy:
+                    # Policy là general policy → tạo policy mới từ general policy
+                    policy = NormalMLPPolicy(state_dim, action_dim, 
+                            hidden_sizes=(args.hidden_size,) * args.num_layers)
+                    policy.load_state_dict(general_policy.state_dict())
+                    learner = generate_learner(policy)
+                    is_using_general_policy = True
+                    print('Using general policy, created new policy and learner')
                 else:
-                    # Sử dụng cluster-based policy (default)
-                    policy = policies[task_id-1]
-                    learner = learners[task_id-1]
-                    print(f'Using cluster-based policy {task_id}')
+                    # Fallback to cluster policy
+                    policy = original_cluster_policy
+                    learner = original_cluster_learner
+                    is_using_own_cluster_policy = True
+                    print(f'Fallback to cluster-based policy {task_id}')
+            else:
+                # Sử dụng cluster-based policy (default)
+                policy = original_cluster_policy
+                learner = original_cluster_learner
+                is_using_own_cluster_policy = True
+                print(f'Using cluster-based policy {task_id}')
             
-            # Get initial learning rate for scheduling (with decay per period)
-            period_lr = args.lr * (args.lr_decay ** period)
-            period_lr = max(period_lr, args.lr_min)
-            if hasattr(learner, 'opt') and learner.opt is not None:
-                if len(learner.opt.param_groups) > 0:
-                    learner.opt.param_groups[0]['lr'] = period_lr
-            rews, period_metrics = inner_train(policy, learner, period=period, track_metrics=True, initial_lr=period_lr)
+            # Train policy (policy có thể là clone hoặc original)
+            rews, period_metrics = inner_train(policy, learner, period=period, track_metrics=True)
             
-            # Update policy trong library (nếu policy đã thay đổi)
-            if 1 <= task_id <= len(policies):
+            # Update policy trong library - Update đúng vị trí theo flowchart
+            # Strategy theo flowchart: θ_{t+1}^(l*) ← θ_t* (update policy đã được chọn và train)
+            if policy_idx is not None:
+                # Case 1: Policy từ library được chọn → update vào cluster của policy đó
+                policies[policy_idx] = policy
+                learners[policy_idx] = learner
+                print(f'[OK] Updated cluster {policy_idx+1} policy after training (l*={policy_idx+1})')
+                
+                # Nếu không phải cluster hiện tại, thông báo
+                if policy_idx != task_id - 1:
+                    print(f'  -> Cluster {task_id} policy remains unchanged')
+                    
+            elif is_using_general_policy:
+                # Case 2: General policy được chọn → update vào cluster hiện tại
+                # (theo flowchart, general policy được coi như policy của cluster hiện tại)
                 policies[task_id-1] = policy
                 learners[task_id-1] = learner
+                print(f'[OK] Updated cluster {task_id} with trained general policy (l*={task_id})')
                 
-                # Update mixture library with trained policy
-                if mixture_library is not None:
-                    # Ensure policies list is long enough
-                    while len(mixture_library['policies']) < len(policies):
-                        mixture_library['policies'].append(None)
-                    # Validate task_id before accessing
-                    if not (1 <= task_id <= len(mixture_library['policies'])):
-                        raise ValueError(f'Invalid task_id {task_id} for mixture_library access (len={len(mixture_library["policies"])})')
-                    mixture_library['policies'][task_id - 1] = policy.state_dict()
-                    print(f'Updated mixture library: updated policy for cluster {task_id}')
+            elif is_using_own_cluster_policy:
+                # Case 3: Cluster-based selection → update cluster hiện tại
+                policies[task_id-1] = policy
+                learners[task_id-1] = learner
+                print(f'[OK] Updated cluster {task_id} policy after training (l*={task_id})')
+                
+            else:
+                # Fallback: không nên xảy ra
+                print(f'[WARNING] No policy update performed for cluster {task_id}')
 
         else:
-            raise ValueError(f'Invalid task_id: {task_id}, num_policies: {num_policies}. Task ID must be between 1 and {num_policies + 1}')
+            raise ValueError(f'Error on task id: {task_id}, num_policies: {num_policies}')
         
         # Track selection history
         policy_selection_history['periods'].append(period + 1)
@@ -840,7 +634,7 @@ try:
         policy_selection_history['selection_method'].append(selection_method)
         policy_selection_history['cluster_reward'].append(float(cluster_reward) if cluster_reward is not None else None)
         policy_selection_history['performance_reward'].append(float(performance_reward) if performance_reward is not None else None)
-        policy_selection_history['final_reward'].append(float(rews.mean()) if 'rews' in locals() else None)
+        policy_selection_history['final_reward'].append(float(rews.mean()))
         rews_llirl[period] = rews
 
         # Track optimal performance for this period
@@ -905,7 +699,6 @@ try:
                 print(f'[WARNING] Fallback save also failed: {e2}')
         
         # Force garbage collection to free memory
-        import gc
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -962,7 +755,7 @@ try:
                 'hidden_size': args.hidden_size,
                 'num_layers': args.num_layers,
                 'period': period + 1,
-                'task_ids': task_ids[:period+1] if len(task_ids) > period + 1 else task_ids,
+                'task_ids': task_ids[:period+1],
                 'completed_periods': period + 1
             }, temp_lightweight)
             if os.path.exists(lightweight_checkpoint):
@@ -971,61 +764,23 @@ try:
         except Exception as e:
             print(f'[WARNING] Could not save lightweight checkpoint: {e}')
         
-        # Save mixture library (env_models + policies) after EVERY period
-        if mixture_library is not None:
-            try:
-                # Ensure policies list matches number of clusters
-                while len(mixture_library['policies']) < len(policies):
-                    mixture_library['policies'].append(None)
-                # Update all policies that exist
-                for idx, policy_obj in enumerate(policies):
-                    if policy_obj is not None:
-                        mixture_library['policies'][idx] = policy_obj.state_dict()
-                mixture_library['num_models'] = len(policies)
-                mixture_library['state_dim'] = state_dim
-                mixture_library['action_dim'] = action_dim
-                
-                # Atomic save
-                temp_mixture_path = env_models_path + '.tmp'
-                torch.save(mixture_library, temp_mixture_path)
-                if os.path.exists(env_models_path):
-                    os.remove(env_models_path)
-                os.rename(temp_mixture_path, env_models_path)
-                print(f'[OK] Updated mixture library with {sum(1 for p in mixture_library["policies"] if p is not None)} policies')
-            except Exception as e:
-                print(f'[WARNING] Could not save mixture library: {e}')
-        
         # Cleanup SUMO connections periodically to prevent memory leaks
         if (period + 1) % 5 == 0:
             try:
-                # Close SUMO connection if exists
                 if hasattr(sampler, '_env') and hasattr(sampler._env, 'sumo_running'):
                     if sampler._env.sumo_running:
                         try:
                             import traci
                             traci.close()
                             sampler._env.sumo_running = False
-                        except Exception as e:
-                            print(f'[WARNING] Error closing SUMO: {e}')
-                
-                # Also check sampler.envs for multiprocessing case
-                if hasattr(sampler, 'envs') and sampler.envs is not None:
-                    for env in sampler.envs:
-                        if hasattr(env, 'sumo_running') and env.sumo_running:
-                            try:
-                                import traci
-                                traci.close()
-                                env.sumo_running = False
-                            except:
-                                pass
-                
+                        except:
+                            pass
                 # Force garbage collection
-                import gc
                 gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-            except Exception as e:
-                print(f'[WARNING] Error during cleanup: {e}')
+            except:
+                pass
 
 except Exception as e:
     print(f'\n[ERROR] Training crashed: {str(e)}')
@@ -1043,14 +798,7 @@ finally:
     
     # Determine how many periods were completed
     try:
-        if _completed_periods > 0:
-            completed_periods = _completed_periods
-        else:
-            # Count periods with valid data (not all zeros)
-            completed_periods = sum(1 for p in range(args.num_periods) 
-                                  if p < len(rews_llirl) and 
-                                  len(rews_llirl[p]) > 0 and 
-                                  not np.all(rews_llirl[p] == 0))
+        completed_periods = _completed_periods if _completed_periods > 0 else len([p for p in range(args.num_periods) if p < len(rews_llirl) and rews_llirl[p].sum() != 0])
         if completed_periods == 0:
             completed_periods = 1  # At least period 0 was done
         print(f'Completed periods: {completed_periods}/{args.num_periods}')
@@ -1064,68 +812,23 @@ finally:
     
     # Cleanup SUMO connections before saving
     try:
-        # Close single environment
         if 'sampler' in globals() and hasattr(sampler, '_env'):
             if hasattr(sampler._env, 'sumo_running') and sampler._env.sumo_running:
                 try:
-                    sampler._env.close()  # Use close() method which handles cleanup
-                except Exception as e:
-                    print(f'[WARNING] Error closing sampler._env: {e}')
-                    try:
-                        import traci
-                        traci.close()
-                        sampler._env.sumo_running = False
-                    except:
-                        pass
-        
-        # Close multiprocessing environments
-        if 'sampler' in globals() and hasattr(sampler, 'envs') and sampler.envs is not None:
-            for env in sampler.envs:
-                if hasattr(env, 'sumo_running') and env.sumo_running:
-                    try:
-                        env.close()
-                    except:
-                        try:
-                            import traci
-                            traci.close()
-                            env.sumo_running = False
-                        except:
-                            pass
-    except Exception as e:
-        print(f'[WARNING] Error during final SUMO cleanup: {e}')
+                    import traci
+                    traci.close()
+                    sampler._env.sumo_running = False
+                except:
+                    pass
+    except:
+        pass
     
     # Force garbage collection before saving
-    import gc
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     
-    # Save final mixture library (env_models + policies) - atomic write
-    if 'mixture_library' in globals() and mixture_library is not None:
-        try:
-            # Ensure policies list matches number of clusters
-            while len(mixture_library['policies']) < len(policies):
-                mixture_library['policies'].append(None)
-            # Update all policies that exist
-            for idx, policy_obj in enumerate(policies):
-                if policy_obj is not None:
-                    mixture_library['policies'][idx] = policy_obj.state_dict()
-            mixture_library['num_models'] = len(policies)
-            mixture_library['state_dim'] = state_dim
-            mixture_library['action_dim'] = action_dim
-            
-            # Atomic save
-            temp_mixture_path = env_models_path + '.tmp'
-            torch.save(mixture_library, temp_mixture_path)
-            if os.path.exists(env_models_path):
-                os.remove(env_models_path)
-            os.rename(temp_mixture_path, env_models_path)
-            num_policies_in_library = sum(1 for p in mixture_library['policies'] if p is not None)
-            print(f'[OK] Saved mixture library with {num_policies_in_library} policies to {env_models_path}')
-        except Exception as e:
-            print(f'[WARNING] Error saving final mixture library: {e}')
-    
-    # Save final policy library (atomic write) - for backward compatibility
+    # Save final policy library (atomic write)
     try:
         final_policies_path = os.path.join(args.model_path, 'policies_final.pth')
         temp_policies_path = final_policies_path + '.tmp'
@@ -1167,7 +870,6 @@ finally:
 
     # Save optimal period data - atomic write
     try:
-        import json
         optimal_data_path = os.path.join(args.model_path, 'optimal_period_data.json')
         temp_optimal_path = optimal_data_path + '.tmp'
         with open(temp_optimal_path, 'w') as f:
@@ -1200,11 +902,6 @@ finally:
 
     # Save training summary - atomic write
     try:
-        # Check if we have valid reward data
-        has_reward_data = (len(rews_llirl) > 0 and 
-                          not np.all(rews_llirl == 0) and 
-                          np.any(np.isfinite(rews_llirl)))
-        
         training_summary = {
     'total_periods': args.num_periods,
     'num_clusters': num_policies,
@@ -1214,9 +911,9 @@ finally:
     'optimizer': args.opt,
     'hidden_size': args.hidden_size,
     'num_layers': args.num_layers,
-    'final_average_reward': float(rews_llirl[-1].mean()) if has_reward_data and len(rews_llirl) > 0 and len(rews_llirl[-1]) > 0 else 0.0,
-    'best_period_reward': float(rews_llirl.max()) if has_reward_data else 0.0,
-    'best_period': int(rews_llirl.max(axis=1).argmax()) + 1 if has_reward_data else 1,
+    'final_average_reward': float(rews_llirl[-1].mean()) if len(rews_llirl) > 0 and rews_llirl[-1].sum() != 0 else 0.0,
+    'best_period_reward': float(rews_llirl.max()) if rews_llirl.sum() != 0 else 0.0,
+    'best_period': int(rews_llirl.max(axis=1).argmax()) + 1 if rews_llirl.sum() != 0 else 1,
             'training_time_minutes': float((time.time() - start_time) / 60.0)
         }
         summary_path = os.path.join(args.model_path, 'training_summary.json')
@@ -1274,12 +971,10 @@ finally:
 
     # Compute and save performance statistics - atomic write
     try:
-        # Check if we have valid reward data (more robust than sum() != 0)
+        # Check if we have data
         has_data = False
         try:
-            has_data = (len(rews_llirl) > 0 and 
-                       not np.all(rews_llirl == 0) and 
-                       np.any(np.isfinite(rews_llirl)))
+            has_data = rews_llirl.sum() != 0 and len(rews_llirl) > 0
         except:
             has_data = False
 
@@ -1288,17 +983,17 @@ finally:
             'overall_std_reward': float(rews_llirl.std()) if has_data else 0.0,
             'overall_max_reward': float(rews_llirl.max()) if has_data else 0.0,
             'overall_min_reward': float(rews_llirl.min()) if has_data else 0.0,
-            'final_period_mean': float(rews_llirl[-1].mean()) if has_data and len(rews_llirl) > 0 and len(rews_llirl[-1]) > 0 else 0.0,
-            'best_period_mean': float(rews_llirl.mean(axis=1).max()) if has_data else 0.0,
-            'worst_period_mean': float(rews_llirl.mean(axis=1).min()) if has_data else 0.0,
+            'final_period_mean': float(rews_llirl[-1].mean()) if len(rews_llirl) > 0 and rews_llirl[-1].sum() != 0 else 0.0,
+            'best_period_mean': float(rews_llirl.mean(axis=1).max()) if rews_llirl.sum() != 0 else 0.0,
+            'worst_period_mean': float(rews_llirl.mean(axis=1).min()) if rews_llirl.sum() != 0 else 0.0,
             'learning_trajectory': {
-                'early_periods_mean': float(rews_llirl[:args.num_periods//3].mean()) if has_data and args.num_periods >= 3 else 0.0,
-                'middle_periods_mean': float(rews_llirl[args.num_periods//3:2*args.num_periods//3].mean()) if has_data and args.num_periods >= 3 else 0.0,
-                'late_periods_mean': float(rews_llirl[2*args.num_periods//3:].mean()) if has_data and args.num_periods >= 3 else 0.0
+                'early_periods_mean': float(rews_llirl[:args.num_periods//3].mean()) if rews_llirl.sum() != 0 else 0.0,
+                'middle_periods_mean': float(rews_llirl[args.num_periods//3:2*args.num_periods//3].mean()) if rews_llirl.sum() != 0 else 0.0,
+                'late_periods_mean': float(rews_llirl[2*args.num_periods//3:].mean()) if rews_llirl.sum() != 0 else 0.0
             },
             'consistency': {
-                'period_std_mean': float(rews_llirl.std(axis=1).mean()) if has_data else 0.0,
-                'iteration_std_mean': float(rews_llirl.std(axis=0).mean()) if has_data else 0.0
+                'period_std_mean': float(rews_llirl.std(axis=1).mean()) if rews_llirl.sum() != 0 else 0.0,
+                'iteration_std_mean': float(rews_llirl.std(axis=0).mean()) if rews_llirl.sum() != 0 else 0.0
             }
         }
         stats_path = os.path.join(args.model_path, 'performance_statistics.json')
