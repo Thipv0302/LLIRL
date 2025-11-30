@@ -1,6 +1,16 @@
 {
-  "likelihood_convergence": [],
-  "posterior_stability": [],
+  "likelihood_convergence": [
+    97856640.0,
+    23690496.0,
+    28987520.0,
+    27885056.0
+  ],
+  "posterior_stability": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
   "cluster_stability": [
     true,
     true,

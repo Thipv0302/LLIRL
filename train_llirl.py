@@ -28,7 +28,8 @@ if __name__ == "__main__":
         "--env_num_layers", "2",
         "--env_hidden_size", "200",
         "--H", "4",
-        "--max_steps", "7200"
+        "--max_steps", "7200",  # 2 hours = 7200 seconds
+        "--zeta", "0.8"  # CRP concentration parameter
     ]
     
     print("=" * 60)

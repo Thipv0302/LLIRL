@@ -23,7 +23,8 @@ class CRP(object):
         ### time period
         self._t = 2
         ### prior distribution
-        self._prior = 0.5 * np.ones(2)
+        self._prior = np.array([1.0 / (1.0 + zeta), zeta / (1.0 + zeta)], dtype=float)
+
 
     def select(self):
         index = np.random.choice(1+np.arange(self._L+1), p=self._prior)
@@ -52,22 +53,47 @@ class CRP(object):
         #print(self._t); print(self._L)
 
 
+# def compute_likelihood(env_model, inputs, outputs, sigma=0.25):
+#     '''
+#     Compute the data likelihood given the environment model
+#     posterior = likelihood * prior
+#     '''
+#     env_model.eval()
+#     # Get device from model to ensure consistency
+#     model_device = next(env_model.parameters()).device
+#     inputs = torch.FloatTensor(inputs).to(model_device)
+#     outputs = torch.FloatTensor(outputs).to(model_device)
+#     pre_out = env_model(inputs)
+
+#     a = - torch.sum(torch.mul(pre_out - outputs, pre_out - outputs), dim=1) / (2*sigma*sigma)
+#     p = a.exp() / (math.sqrt(2*math.pi)*sigma) 
+#     # p = torch.clamp(p, 1e-2, 1e2)
+
+#     #print(p[:10], p.min(), p.max(), p.mean())
+#     #print(loglikelihood, loglikelihood.exp())
+
+#     return p.mean().detach().cpu().numpy()
+
 def compute_likelihood(env_model, inputs, outputs, sigma=0.25):
-    '''
-    Compute the data likelihood given the environment model
-    posterior = likelihood * prior
-    '''
+    """
+    Compute the log-likelihood (NOT probability!) for CRP + EM.
+    Return a scalar log-likelihood value.
+    """
     env_model.eval()
-    inputs = torch.FloatTensor(inputs); outputs = torch.FloatTensor(outputs)
-    if torch.cuda.is_available(): inputs = inputs.cuda(); outputs = outputs.cuda()
-    pre_out = env_model(inputs)
 
-    a = - torch.sum(torch.mul(pre_out - outputs, pre_out - outputs), dim=1) / (2*sigma*sigma)
-    p = a.exp() / (math.sqrt(2*math.pi)*sigma) 
-    # p = torch.clamp(p, 1e-2, 1e2)
+    # Ensure same device
+    device = next(env_model.parameters()).device
+    inputs  = torch.as_tensor(inputs,  dtype=torch.float32, device=device)
+    outputs = torch.as_tensor(outputs, dtype=torch.float32, device=device)
 
-    #print(p[:10], p.min(), p.max(), p.mean())
-    #print(loglikelihood, loglikelihood.exp())
+    with torch.no_grad():
+        preds = env_model(inputs)
 
-    return p.mean().detach().cpu().numpy()
+        # MSE per sample: mean over features/dimensions
+        mse_per_sample = torch.mean((preds - outputs)**2, dim=1)
 
+        # log-likelihood (Gaussian, drop constants)
+        log_ll = - mse_per_sample / (2 * sigma * sigma)
+
+    # return mean log-likelihood as scalar
+    return log_ll.mean().item()
