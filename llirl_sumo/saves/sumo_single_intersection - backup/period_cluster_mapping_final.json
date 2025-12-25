@@ -1,0 +1,263 @@
+[
+  {
+    "period": 1,
+    "cluster_id": 1,
+    "task": [
+      0.9354881644248962,
+      0.32425400614738464
+    ],
+    "assigned_policy": 1
+  },
+  {
+    "period": 2,
+    "cluster_id": 2,
+    "task": [
+      1.6878516674041748,
+      0.4498057961463928
+    ],
+    "assigned_policy": 2
+  },
+  {
+    "period": 3,
+    "cluster_id": 3,
+    "task": [
+      1.7326056957244873,
+      0.05193297192454338
+    ],
+    "assigned_policy": 3
+  },
+  {
+    "period": 4,
+    "cluster_id": 3,
+    "task": [
+      1.2455681562423706,
+      0.15587234497070312
+    ],
+    "assigned_policy": 3
+  },
+  {
+    "period": 5,
+    "cluster_id": 2,
+    "task": [
+      1.1882355213165283,
+      0.039051659405231476
+    ],
+    "assigned_policy": 2
+  },
+  {
+    "period": 6,
+    "cluster_id": 2,
+    "task": [
+      1.0575964450836182,
+      0.46893510222435
+    ],
+    "assigned_policy": 2
+  },
+  {
+    "period": 7,
+    "cluster_id": 3,
+    "task": [
+      1.4573675394058228,
+      0.4795435070991516
+    ],
+    "assigned_policy": 3
+  },
+  {
+    "period": 8,
+    "cluster_id": 4,
+    "task": [
+      1.2926169633865356,
+      0.09562109410762787
+    ],
+    "assigned_policy": 4
+  },
+  {
+    "period": 9,
+    "cluster_id": 4,
+    "task": [
+      1.7642384767532349,
+      0.477010577917099
+    ],
+    "assigned_policy": 4
+  },
+  {
+    "period": 10,
+    "cluster_id": 5,
+    "task": [
+      1.6009844541549683,
+      0.22202414274215698
+    ],
+    "assigned_policy": 5
+  },
+  {
+    "period": 11,
+    "cluster_id": 5,
+    "task": [
+      1.2552052736282349,
+      0.1317121982574463
+    ],
+    "assigned_policy": 5
+  },
+  {
+    "period": 12,
+    "cluster_id": 6,
+    "task": [
+      1.6010581254959106,
+      0.334948867559433
+    ],
+    "assigned_policy": 6
+  },
+  {
+    "period": 13,
+    "cluster_id": 7,
+    "task": [
+      0.8417179584503174,
+      0.18813416361808777
+    ],
+    "assigned_policy": 7
+  },
+  {
+    "period": 14,
+    "cluster_id": 7,
+    "task": [
+      1.5694578886032104,
+      0.49273306131362915
+    ],
+    "assigned_policy": 7
+  },
+  {
+    "period": 15,
+    "cluster_id": 6,
+    "task": [
+      0.8031710982322693,
+      0.33353665471076965
+    ],
+    "assigned_policy": 6
+  },
+  {
+    "period": 16,
+    "cluster_id": 8,
+    "task": [
+      1.0928094387054443,
+      0.49573370814323425
+    ],
+    "assigned_policy": 8
+  },
+  {
+    "period": 17,
+    "cluster_id": 7,
+    "task": [
+      1.4109143018722534,
+      0.4867822229862213
+    ],
+    "assigned_policy": 7
+  },
+  {
+    "period": 18,
+    "cluster_id": 10,
+    "task": [
+      1.7130273580551147,
+      0.09072816371917725
+    ],
+    "assigned_policy": 10
+  },
+  {
+    "period": 19,
+    "cluster_id": 9,
+    "task": [
+      1.1001150608062744,
+      0.22068600356578827
+    ],
+    "assigned_policy": 9
+  },
+  {
+    "period": 20,
+    "cluster_id": 5,
+    "task": [
+      1.0485986471176147,
+      0.3363966941833496
+    ],
+    "assigned_policy": 5
+  },
+  {
+    "period": 21,
+    "cluster_id": 10,
+    "task": [
+      1.466392159461975,
+      0.32678380608558655
+    ],
+    "assigned_policy": 10
+  },
+  {
+    "period": 22,
+    "cluster_id": 11,
+    "task": [
+      1.787532925605774,
+      0.1915196180343628
+    ],
+    "assigned_policy": 11
+  },
+  {
+    "period": 23,
+    "cluster_id": 10,
+    "task": [
+      1.2682703733444214,
+      0.33461591601371765
+    ],
+    "assigned_policy": 10
+  },
+  {
+    "period": 24,
+    "cluster_id": 5,
+    "task": [
+      0.9232873916625977,
+      0.3599178194999695
+    ],
+    "assigned_policy": 5
+  },
+  {
+    "period": 51,
+    "cluster_id": 4,
+    "task": [
+      1.4009783267974854,
+      0.10276315361261368
+    ],
+    "assigned_policy": 4
+  },
+  {
+    "period": 52,
+    "cluster_id": 4,
+    "task": [
+      1.4009783267974854,
+      0.10276315361261368
+    ],
+    "assigned_policy": 4
+  },
+  {
+    "period": 53,
+    "cluster_id": 4,
+    "task": [
+      1.4009783267974854,
+      0.10276315361261368
+    ],
+    "assigned_policy": 4
+  },
+  {
+    "period": 54,
+    "cluster_id": 4,
+    "task": [
+      1.4009783267974854,
+      0.10276315361261368
+    ],
+    "assigned_policy": 4
+  },
+  {
+    "period": 55,
+    "cluster_id": 2,
+    "task": [
+      1.0,
+      0.0
+    ],
+    "assigned_policy": 2
+  }
+]

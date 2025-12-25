@@ -1,0 +1,47 @@
+[
+  {
+    "period": 56,
+    "cluster_id": 9,
+    "task": [
+      1.0,
+      0.0
+    ],
+    "assigned_policy": 9
+  },
+  {
+    "period": 57,
+    "cluster_id": 13,
+    "task": [
+      1.0,
+      0.0
+    ],
+    "assigned_policy": 13
+  },
+  {
+    "period": 58,
+    "cluster_id": 13,
+    "task": [
+      1.0,
+      0.0
+    ],
+    "assigned_policy": 13
+  },
+  {
+    "period": 59,
+    "cluster_id": 13,
+    "task": [
+      1.0,
+      0.0
+    ],
+    "assigned_policy": 13
+  },
+  {
+    "period": 60,
+    "cluster_id": 13,
+    "task": [
+      1.0,
+      0.0
+    ],
+    "assigned_policy": 13
+  }
+]

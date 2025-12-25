@@ -1,0 +1,10 @@
+{
+  "periods": [],
+  "cluster_ids": [],
+  "mean_rewards": [],
+  "std_rewards": [],
+  "best_rewards": [],
+  "best_episodes": [],
+  "epsilon_end": [],
+  "episodes_trained": []
+}
