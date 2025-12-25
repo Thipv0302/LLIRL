@@ -1,2 +1,0 @@
-# LLIRL Library for SUMO
-

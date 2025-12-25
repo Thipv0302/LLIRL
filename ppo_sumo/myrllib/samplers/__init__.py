@@ -1,2 +1,0 @@
-from .sampler import BatchSampler
-

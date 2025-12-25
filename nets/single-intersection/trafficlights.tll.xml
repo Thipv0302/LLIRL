@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<additional>
-    <tlLogic id="J1" type="static" programID="main" offset="0">
-        <phase duration="25" state="GrGr"/>
-        <phase duration="3" state="yryr"/>
-        <phase duration="25" state="rGrG"/>
-        <phase duration="3" state="ryry"/>
-    </tlLogic>
-</additional>
